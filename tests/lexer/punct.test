@@ -1,0 +1,28 @@
+{}()!===*<<=>=>!/+-,.= == 
+
+
+//
+
+
+==  
+
+
+// EXPECTED
+// expect: LEFT_BRACE {
+// expect: RIGHT_BRACE }
+// expect: LEFT_PAREN (
+// expect: RIGHT PAREN )
+// expect: NOT_EQUAL !=
+// expect: EQUAL_EQUAL == 
+// expect: STAR *
+// expect: LESS < 
+// expect: LEQ <= 
+// expect: GEQ >=
+// expect: GREATER >
+// expect: NOT ! 
+// expect: SLASH / 
+// expect: PLUS +
+// expect: MINUS -
+// expect: COMMA ,
+// expect: DOT . 
+
