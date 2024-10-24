@@ -45,7 +45,7 @@ pub struct Token<'de> {
 
 enum TokenKind {
     /// Ident
-    //Ident,
+    Ident,
 
     /// Number
     Number(f64),
@@ -69,6 +69,24 @@ enum TokenKind {
     Minus,
     Comma,
     Dot,
+
+    ///Keywords
+    And,
+    Class,
+    Else,
+    For,
+    If,
+    Nil,
+    Fun,
+    True,
+    False,
+    Or,
+    Print,
+    Return,
+    Super,
+    This,
+    Var,
+    While,
 }
 
 impl std::fmt::Display for Token<'_> {
@@ -92,8 +110,25 @@ impl std::fmt::Display for Token<'_> {
             TokenKind::Plus => write!(f, " Plus {origin} null"),
             TokenKind::Minus => write!(f, " Minus {origin} null"),
             TokenKind::Comma => write!(f, " Comma {origin} null"),
-            TokenKind::Dot => write!(f, " Dot {origin} null"),
             TokenKind::Number(a) => write!(f, "Number {origin} {a}"),
+            TokenKind::Dot => write!(f, " Dot {origin} null"),
+            TokenKind::And => write!(f, " AND {origin} null"),
+            TokenKind::Class => write!(f, " CLASS {origin} null"),
+            TokenKind::Else => write!(f, " ELSE {origin} null"),
+            TokenKind::For => write!(f, " FOR {origin} null"),
+            TokenKind::If => write!(f, " IF {origin} null"),
+            TokenKind::Nil => write!(f, " NIL {origin} null"),
+            TokenKind::Fun => write!(f, " FUN {origin} null"),
+            TokenKind::True => write!(f, " TRUE {origin} null"),
+            TokenKind::False => write!(f, " FALSE {origin} null"),
+            TokenKind::Or => write!(f, " OR {origin} null"),
+            TokenKind::Print => write!(f, " PRINT {origin} null"),
+            TokenKind::Return => write!(f, " RETURN {origin} null"),
+            TokenKind::Super => write!(f, " SUPER {origin} null"),
+            TokenKind::This => write!(f, " THIS {origin} null"),
+            TokenKind::Var => write!(f, " VAR {origin} null"),
+            TokenKind::While => write!(f, " WHILE {origin} null"),
+            TokenKind::Ident => write!(f, " Ident {origin} null"),
         }
     }
 }
@@ -192,7 +227,38 @@ impl<'de> Iterator for Lexer<'de> {
                     }));
                 }
                 Started::Ident => {
-                    todo!()
+                    let first_non_ident = c_onwards
+                        .find(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_'))
+                        .unwrap_or_else(|| c_onwards.len());
+                    let literal = &c_onwards[..first_non_ident];
+                    let extra_bytes = literal.len() - c.len_utf8();
+                    self.byte += extra_bytes;
+                    self.rest = &self.rest[extra_bytes..];
+
+                    let kind = match literal {
+                        "and" => TokenKind::And,
+                        "class" => TokenKind::Class,
+                        "else" => TokenKind::Else,
+                        "for" => TokenKind::For,
+                        "if" => TokenKind::If,
+                        "nil" => TokenKind::Nil,
+                        "fun" => TokenKind::Fun,
+                        "true" => TokenKind::True,
+                        "false" => TokenKind::False,
+                        "or" => TokenKind::Or,
+                        "print" => TokenKind::Print,
+                        "return" => TokenKind::Return,
+                        "super" => TokenKind::Super,
+                        "this" => TokenKind::This,
+                        "var" => TokenKind::Var,
+                        "while" => TokenKind::While,
+                        _ => TokenKind::Ident,
+                    };
+                    return Some(Ok(Token {
+                        kind,
+                        origin: literal,
+                        offset: c_at,
+                    }));
                 }
                 Started::Slash => {
                     if self.rest.starts_with("/") {
