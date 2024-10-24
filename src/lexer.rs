@@ -1,9 +1,30 @@
-use miette::{Error, LabeledSpan, WrapErr};
+use miette::{Diagnostic, Error, LabeledSpan, SourceSpan, SpanContents};
+use thiserror::Error;
 
 pub struct Lexer<'de> {
     whole: &'de str,
     rest: &'de str,
     byte: usize,
+}
+
+#[derive(Diagnostic, Debug, Error)]
+#[error("[Lexer] Unexpected Token '{token}' in input")]
+pub struct SingleTokenError {
+    /// The `Source` that miette will use
+    #[source_code]
+    src: String,
+
+    pub token: char,
+
+    #[label = "Unrecognized Token"]
+    err_span: SourceSpan,
+}
+
+impl SingleTokenError {
+    pub fn line(&self) -> usize {
+        let until_unrecognized = &self.src[..=self.err_span.offset()];
+        until_unrecognized.lines().count()
+    }
 }
 
 impl<'de> Lexer<'de> {
@@ -43,7 +64,6 @@ enum TokenKind {
     Leq,
     Geq,
     Greater,
-    Not,
     Slash,
     Plus,
     Minus,
@@ -68,7 +88,6 @@ impl std::fmt::Display for Token<'_> {
             TokenKind::Leq => write!(f, " Leq {origin} null"),
             TokenKind::Geq => write!(f, " Geq {origin} null"),
             TokenKind::Greater => write!(f, " Greater {origin} null"),
-            TokenKind::Not => write!(f, " Not {origin} null"),
             TokenKind::Slash => write!(f, " Slash {origin} null"),
             TokenKind::Plus => write!(f, " Plus {origin} null"),
             TokenKind::Minus => write!(f, " Minus {origin} null"),
@@ -128,13 +147,12 @@ impl<'de> Iterator for Lexer<'de> {
                 '"' => Started::String,
                 c if c.is_whitespace() => continue,
                 c => {
-                    return Some(Err(miette::miette! {
-                        labels = vec![
-                            LabeledSpan::at(c_at + c.len_utf8(), "This Char"),
-                        ],
-                        "[Lexer] Unexpected Token in input",
+                    return Some(Err(SingleTokenError {
+                        src: self.whole.to_string(),
+                        token: c,
+                        err_span: SourceSpan::from(self.byte - c.len_utf8()..self.byte),
                     }
-                    .with_source_code(self.whole.to_string())));
+                    .into()))
                 }
             };
 
