@@ -1,51 +1,17 @@
-use miette::{Diagnostic, Error, LabeledSpan, SourceSpan, SpanContents};
+use std::borrow::Cow;
+
+use miette::{Diagnostic, Error, LabeledSpan, SourceSpan};
 use thiserror::Error;
-
-pub struct Lexer<'de> {
-    whole: &'de str,
-    rest: &'de str,
-    byte: usize,
-}
-
-#[derive(Diagnostic, Debug, Error)]
-#[error("[Lexer] Unexpected Token '{token}' in input")]
-pub struct SingleTokenError {
-    /// The `Source` that miette will use
-    #[source_code]
-    src: String,
-
-    pub token: char,
-
-    #[label = "Unrecognized Token"]
-    err_span: SourceSpan,
-}
-
-impl SingleTokenError {
-    pub fn line(&self) -> usize {
-        let until_unrecognized = &self.src[..=self.err_span.offset()];
-        until_unrecognized.lines().count()
-    }
-}
-
-impl<'de> Lexer<'de> {
-    pub fn new(input: &'de str) -> Self {
-        Self {
-            whole: input,
-            rest: input,
-            byte: 0,
-        }
-    }
-}
 
 pub struct Token<'de> {
     kind: TokenKind,
     origin: &'de str,
-    offset: usize,
 }
 
 enum TokenKind {
     /// Ident
     Ident,
+    String,
 
     /// Number
     Number(f64),
@@ -129,6 +95,68 @@ impl std::fmt::Display for Token<'_> {
             TokenKind::Var => write!(f, " VAR {origin} null"),
             TokenKind::While => write!(f, " WHILE {origin} null"),
             TokenKind::Ident => write!(f, " Ident {origin} null"),
+            TokenKind::String => write!(f, " String {origin} {}", Token::unescape(self.origin)),
+        }
+    }
+}
+
+impl Token<'_> {
+    pub fn unescape<'de>(s: &'de str) -> Cow<'de, str> {
+        // No escapes in lox :)
+        Cow::Borrowed(s.trim_matches('"'))
+    }
+}
+
+pub struct Lexer<'de> {
+    whole: &'de str,
+    rest: &'de str,
+    byte: usize,
+}
+
+#[derive(Diagnostic, Debug, Error)]
+#[error("[Lexer] Unexpected Token '{token}'")]
+pub struct SingleTokenError {
+    /// The `Source` that miette will use
+    #[source_code]
+    src: String,
+
+    pub token: char,
+
+    #[label = "Unrecognized Token"]
+    err_span: SourceSpan,
+}
+
+impl SingleTokenError {
+    pub fn line(&self) -> usize {
+        let until_unrecognized = &self.src[..=self.err_span.offset()];
+        until_unrecognized.lines().count()
+    }
+}
+
+#[derive(Diagnostic, Debug, Error)]
+#[error("[Lexer] No String Termination")]
+pub struct StringTerminationError {
+    /// The `Source` that miette will use
+    #[source_code]
+    src: String,
+
+    #[label = "No End quote"]
+    err_span: SourceSpan,
+}
+
+impl StringTerminationError {
+    pub fn line(&self) -> usize {
+        let until_unrecognized = &self.src[..=self.err_span.offset()];
+        until_unrecognized.lines().count()
+    }
+}
+
+impl<'de> Lexer<'de> {
+    pub fn new(input: &'de str) -> Self {
+        Self {
+            whole: input,
+            rest: input,
+            byte: 0,
         }
     }
 }
@@ -140,7 +168,6 @@ impl<'de> Iterator for Lexer<'de> {
         loop {
             let mut chars = self.rest.chars();
             let c = chars.next()?;
-            let c_at = self.byte;
             let c_str = &self.rest[..c.len_utf8()];
             let c_onwards = self.rest;
             self.rest = chars.as_str();
@@ -149,7 +176,6 @@ impl<'de> Iterator for Lexer<'de> {
             let just = move |kind: TokenKind| -> Option<Result<Token<'de>, Error>> {
                 Some(Ok(Token {
                     kind,
-                    offset: c_at,
                     origin: c_str,
                 }))
             };
@@ -223,7 +249,6 @@ impl<'de> Iterator for Lexer<'de> {
                     return Some(Ok(Token {
                         kind: TokenKind::Number(n),
                         origin: literal,
-                        offset: c_at,
                     }));
                 }
                 Started::Ident => {
@@ -257,7 +282,6 @@ impl<'de> Iterator for Lexer<'de> {
                     return Some(Ok(Token {
                         kind,
                         origin: literal,
-                        offset: c_at,
                     }));
                 }
                 Started::Slash => {
@@ -270,7 +294,6 @@ impl<'de> Iterator for Lexer<'de> {
                     } else {
                         Some(Ok(Token {
                             origin: c_str,
-                            offset: c_at,
                             kind: TokenKind::Slash,
                         }))
                     }
@@ -283,17 +306,34 @@ impl<'de> Iterator for Lexer<'de> {
                         Some(Ok(Token {
                             kind: yes,
                             origin: span,
-                            offset: c_at,
                         }))
                     } else {
                         Some(Ok(Token {
                             kind: no,
                             origin: c_str,
-                            offset: c_at,
                         }))
                     }
                 }
-                __ => todo!(),
+                Started::String => {
+                    if let Some(end) = self.rest.find('"') {
+                        self.byte += end + 1;
+                        self.rest = &self.rest[end + 1..];
+                        let origin = &c_onwards[..end + 1 + 1];
+
+                        return Some(Ok(Token {
+                            origin,
+                            kind: TokenKind::String,
+                        }));
+                    } else {
+                        self.byte += self.rest.len();
+                        self.rest = &self.rest[self.rest.len()..];
+                        return Some(Err(StringTerminationError {
+                            src: self.whole.to_string(),
+                            err_span: SourceSpan::from(self.byte - c.len_utf8()..self.whole.len()),
+                        }
+                        .into()));
+                    }
+                }
             };
         }
     }
