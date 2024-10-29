@@ -4,11 +4,11 @@ use miette::{Diagnostic, Error, LabeledSpan, SourceSpan};
 use thiserror::Error;
 
 pub struct Token<'de> {
-    kind: TokenKind,
-    origin: &'de str,
+    pub kind: TokenKind,
+    pub origin: &'de str,
 }
 
-enum TokenKind {
+pub enum TokenKind {
     /// Ident
     Ident,
     String,
@@ -21,20 +21,23 @@ enum TokenKind {
     RightBrace,
     LeftParen,
     RightParen,
+    Comma,
+    Semicolon,
+
+    /// Operators
+    Plus,
+    Minus,
+    Star,
     NotEqual,
     EqualEqual,
-    Equal,
-    Bang,
-    Star,
-    Less,
     Leq,
     Geq,
     Greater,
+    Less,
     Slash,
-    Plus,
-    Minus,
-    Comma,
     Dot,
+    Bang,
+    Equal,
 
     ///Keywords
     And,
@@ -76,6 +79,7 @@ impl std::fmt::Display for Token<'_> {
             TokenKind::Plus => write!(f, " Plus {origin} null"),
             TokenKind::Minus => write!(f, " Minus {origin} null"),
             TokenKind::Comma => write!(f, " Comma {origin} null"),
+            TokenKind::Semicolon => write!(f, " Semicolon {origin} null"),
             TokenKind::Number(a) => write!(f, "Number {origin} {a}"),
             TokenKind::Dot => write!(f, " Dot {origin} null"),
             TokenKind::And => write!(f, " AND {origin} null"),
@@ -198,6 +202,7 @@ impl<'de> Iterator for Lexer<'de> {
                 '.' => return just(TokenKind::Dot),
                 '+' => return just(TokenKind::Plus),
                 '-' => return just(TokenKind::Minus),
+                ';' => return just(TokenKind::Semicolon),
                 '/' => Started::Slash,
                 '>' => Started::IfEqualElse(TokenKind::Geq, TokenKind::Greater),
                 '<' => Started::IfEqualElse(TokenKind::Leq, TokenKind::Less),
