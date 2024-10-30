@@ -1,4 +1,4 @@
-use loxy::Lexer::Lexer;
+use crate::lexer::{Lexer, Token, TokenKind};
 use miette::{Context, Diagnostic, Error, LabeledSpan, SourceSpan};
 use std::{borrow::Cow, fmt};
 use thiserror::Error;
@@ -14,11 +14,11 @@ pub struct Ast;
 #[error("Unexpected EOF")]
 pub struct Eof;
 
-impl fmt::Display for S {
+impl fmt::Display for TokenTree<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            S::Atom(i) => write!(f, "{}", i),
-            S::Cons(head, rest) => {
+            TokenTree::Atom(i) => write!(f, "{}", i),
+            TokenTree::Cons(head, rest) => {
                 write!(f, "({}", head)?;
                 for s in rest {
                     write!(f, " {}", s)?
@@ -31,13 +31,33 @@ impl fmt::Display for S {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Atom<'de> {
-    String(Cow<&'de str>),
+    String(Cow<'de, str>),
     Number(f64),
     Nil,
     Bool(bool),
     Ident(&'de str),
     Super,
     This,
+}
+
+impl fmt::Display for Atom<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Atom::String(s) => write!(f, "{s}"),
+            Atom::Number(n) => {
+                if *n == n.trunc() {
+                    write!(f, "{n}.0")
+                } else {
+                    write!(f, "{n}")
+                }
+            }
+            Atom::Nil => write!(f, "nil"),
+            Atom::Bool(b) => write!(f, "{b:?}"),
+            Atom::Ident(id) => write!(f, "{id}"),
+            Atom::Super => write!(f, "super"),
+            Atom::This => write!(f, "this"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,9 +72,7 @@ pub enum Op {
     Greater,
     Less,
     Slash,
-    Dot,
     Bang,
-    Equal,
 
     // Non
     Field,
@@ -62,14 +80,49 @@ pub enum Op {
     /// Keywords operators
     And,
     Or,
-    If,
     For,
     While,
     Class, // Operand first is a block
-    Fun,   // Operands  Name, Params Body
     Print,
     Return,
     Var,
+
+    //
+    Call,
+    Group,
+}
+
+impl fmt::Display for Op {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Op::Minus => "-",
+                Op::Plus => "+",
+                Op::Star => "*",
+                Op::NotEqual => "!=",
+                Op::EqualEqual => "==",
+                Op::Leq => "<=",
+                Op::Geq => ">=",
+                Op::Less => "<",
+                Op::Greater => ">",
+                Op::Slash => "/",
+                Op::Bang => "!",
+                Op::And => "and",
+                Op::Or => "or",
+                Op::For => "for",
+                Op::Class => "class",
+                Op::Print => "print",
+                Op::Return => "return",
+                Op::Field => ".",
+                Op::Var => "var",
+                Op::While => "while",
+                Op::Call => "call",
+                Op::Group => "group",
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -85,7 +138,7 @@ enum TokenTree<'de> {
 }
 
 impl<'de> Parser<'de> {
-    pub fn new(input: &'de str) {
+    pub fn new(input: &'de str) -> Self {
         Parser {
             whole: input,
             lexer: Lexer::new(input),
@@ -101,22 +154,25 @@ impl<'de> Parser<'de> {
         looking_for: Option<(Op, usize)>,
         min_bp: u8,
     ) -> Result<TokenTree<'de>, Error> {
-        let looking_for = || {};
+        let looking_for_msg = move || {
+            if let Some((op, argi)) = looking_for {
+                format!("Looking for #{argi} for {op:?}")
+            } else {
+                "looking_for a statement".to_string()
+            }
+        };
 
         let mut lhs = match self.lexer.next() {
             Some(Ok(token)) => token,
             None => return Ok(TokenTree::Atom(Atom::Nil)),
             Some(Err(e)) => {
-                if let Some((op, argi)) = looking_for {
-                    format!("looking for argument #{argi} for {op:?}")
-                } else {
-                    "looking for a statement".to_string()
-                }
+                let msg = looking_for_msg();
+                return Err(e).wrap_err(msg);
             }
         };
 
         let mut lhs = match lhs {
-            /// Atoms
+            // Atoms
             Token {
                 kind: TokenKind::String,
                 origin,
@@ -138,7 +194,7 @@ impl<'de> Parser<'de> {
                 origin,
             } => TokenTree::Atom(Atom::Ident(origin)),
 
-            /// Groups
+            // Groups
             Token {
                 kind: TokenKind::LeftParen | TokenKind::LeftBrace,
                 ..
@@ -149,11 +205,23 @@ impl<'de> Parser<'de> {
                     _ => unreachable!("by otter match arm pattern"),
                 };
                 let lhs = self.parse_within(looking_for, 0).wrap_err("group")?;
+                match self.lexer.next() {
+                    Some(token) if token == terminator => {}
+                    Some(token) => {
+                        return Err(miette::miette! {
+                            labels = vec![
+                            LabeledSpan::at(self., label)
+                            ],
+                        })
+                        .wrap_err(looking_for_msg());
+                    }
+                    None => return Err(Eof).wrap_err(looking_for_msg()),
+                }
                 assert_eq(self.lexer.next().kind, terminator);
                 lhs
             }
 
-            /// prefix expressiosn
+            // prefix expressiosn
             Token {
                 kind: TokenKind::Bang | TokenKind::Print | TokenKind::Minus,
                 ..
