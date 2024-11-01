@@ -1,18 +1,9 @@
 use crate::lexer::{Lexer, Token, TokenKind};
-use miette::{Context, Diagnostic, Error, LabeledSpan, SourceSpan};
+use miette::{Context, Error, LabeledSpan, SourceSpan};
 use std::{borrow::Cow, fmt};
-use thiserror::Error;
 
-pub struct Parser<'de> {
-    whole: &'de str,
-    lexer: Lexer<'de>,
-}
 
 pub struct Ast;
-
-#[derive(Diagnostic, Debug, Error)]
-#[error("Unexpected EOF")]
-pub struct Eof;
 
 impl fmt::Display for TokenTree<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -88,7 +79,7 @@ pub enum Op {
     Var,
 
     //
-    Call,
+    Fun,
     Group,
 }
 
@@ -118,7 +109,7 @@ impl fmt::Display for Op {
                 Op::Field => ".",
                 Op::Var => "var",
                 Op::While => "while",
-                Op::Call => "call",
+                Op::Fun => "Fun",
                 Op::Group => "group",
             }
         )
@@ -134,7 +125,12 @@ enum Delimiter {
 #[derive(Debug, Clone, PartialEq)]
 enum TokenTree<'de> {
     Atom(Atom<'de>),
-    Cons(Op, Vec<TokenTree>),
+    Cons(Op, Vec<TokenTree<'de>>),
+}
+
+pub struct Parser<'de> {
+    whole: &'de str,
+    lexer: Lexer<'de>,
 }
 
 impl<'de> Parser<'de> {
@@ -146,28 +142,19 @@ impl<'de> Parser<'de> {
     }
 
     pub fn parse(mut self) -> Result<TokenTree<'de>, Error> {
-        self.parse_within(None, 0)
+        self.parse_within(0)
     }
 
     pub fn parse_within(
         &mut self,
-        looking_for: Option<(Op, usize)>,
         min_bp: u8,
     ) -> Result<TokenTree<'de>, Error> {
-        let looking_for_msg = move || {
-            if let Some((op, argi)) = looking_for {
-                format!("Looking for #{argi} for {op:?}")
-            } else {
-                "looking_for a statement".to_string()
-            }
-        };
 
         let mut lhs = match self.lexer.next() {
             Some(Ok(token)) => token,
             None => return Ok(TokenTree::Atom(Atom::Nil)),
             Some(Err(e)) => {
-                let msg = looking_for_msg();
-                return Err(e).wrap_err(msg);
+                return Err(e).wrap_err("Parsing LHS");
             }
         };
 
@@ -176,6 +163,7 @@ impl<'de> Parser<'de> {
             Token {
                 kind: TokenKind::String,
                 origin,
+                ..
             } => TokenTree::Atom(Atom::String(Token::unescape(origin))),
             Token {
                 kind: TokenKind::Number(n),
@@ -190,8 +178,13 @@ impl<'de> Parser<'de> {
                 ..
             } => TokenTree::Atom(Atom::Bool(false)),
             Token {
+                kind: TokenKind::Nil,
+                ..
+            } => TokenTree::Atom(Atom::Nil),
+            Token {
                 kind: TokenKind::Ident,
                 origin,
+                ..
             } => TokenTree::Atom(Atom::Ident(origin)),
 
             // Groups
@@ -204,48 +197,235 @@ impl<'de> Parser<'de> {
                     TokenKind::LeftBrace => TokenKind::RightBrace,
                     _ => unreachable!("by otter match arm pattern"),
                 };
-                let lhs = self.parse_within(looking_for, 0).wrap_err("group")?;
-                match self.lexer.next() {
-                    Some(token) if token == terminator => {}
-                    Some(token) => {
-                        return Err(miette::miette! {
-                            labels = vec![
-                            LabeledSpan::at(self., label)
-                            ],
-                        })
-                        .wrap_err(looking_for_msg());
-                    }
-                    None => return Err(Eof).wrap_err(looking_for_msg()),
-                }
-                assert_eq(self.lexer.next().kind, terminator);
+                let lhs = self
+                    .parse_within(0)
+                    .wrap_err("in bracketed expression")?;
+                self.lexer
+                    .expect(terminator, "Unexpected end to bracked expression")
+                    .wrap_err("After bracked expression")?;
                 lhs
             }
-
-            // prefix expressiosn
+            
+            // unary prefix expression
             Token {
-                kind: TokenKind::Bang | TokenKind::Print | TokenKind::Minus,
+                kind: TokenKind::Bang | TokenKind::Print | TokenKind::Minus | TokenKind::Return,
                 ..
             } => {
                 let op = match lhs.kind {
                     TokenKind::Bang => Op::Bang,
                     TokenKind::Print => Op::Print,
                     TokenKind::Minus => Op::Minus,
+                    TokenKind::Return => Op::Return,
                     _ => unreachable!("by otter match arm pattern"),
                 };
                 let ((), r_bp) = prefix_binding_power(op);
                 let rhs = self
-                    .parse_within(Some((op, 0)), r_bp)
-                    .wrap_err("parse RHS")?;
+                    .parse_within(r_bp)
+                    .wrap_err("in RHS")?;
                 TokenTree::Cons(op, vec![rhs])
             }
+            
+            // prefix, two args
+            Token {
+                kind: TokenKind::Class | TokenKind::Var,
+                ..
+            } => {
+                
+                let op = match lhs.kind {
+                    TokenKind::Class => Op::Class,
+                    TokenKind::Var => Op::Var,
+                    _ => unreachable!("by otter match arm pattern"),
+                };
+
+                if matches!(lhs.kind, TokenKind::For | TokenKind::While ) {
+
+                }
+
+                let first = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in first arg of {op:?} expression"))?;
+
+                if lhs.kind == TokenKind::Var {
+                    if matches!(first, TokenTree::Atom(Atom::Ident(_))) {
+                        todo!()
+                    }
+                    self.lexer 
+                        .expect(TokenKind::Equal, "missing =")
+                        .wrap_err("in variable assignment")?;
+                }
+
+                let second = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in second argument of {op:?} expression"))?;
+
+                TokenTree::Cons(op, vec![first, second])
+            },
+
+            
+            Token {
+                kind: TokenKind::For,
+                ..
+            } => {
+                
+                let op = match lhs.kind {
+                    TokenKind::For => Op::For,
+                    _ => unreachable!("by otter match arm pattern"),
+                };
+
+                self.lexer
+                    .expect(TokenKind::LeftParen, "missing (")
+                    .wrap_err("in for loop conditional")?;
+
+                let init = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in init of for loop"))?;
+                
+                self.lexer
+                    .expect(TokenKind::Semicolon, "missing ;")
+                    .wrap_err("in for loop")?;
+
+                let cond = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in cond of for loop"))?;
+
+                self.lexer
+                    .expect(TokenKind::Semicolon, "missing ;")
+                    .wrap_err("in for loop")?;
+
+                let inc = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in inc of for loop"))?;
+                
+                self.lexer
+                    .expect(TokenKind::RightParen, "missing )")
+                    .wrap_err("in for loop")?;
+                
+                self.lexer
+                    .expect(TokenKind::LeftBrace, "missing {")
+                    .wrap_err("in for loop")?;
+                
+                let block = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in block of for loop"))?;
+                
+                self.lexer
+                    .expect(TokenKind::LeftBrace, "missing }")
+                    .wrap_err("in for loop")?;
+
+                TokenTree::Cons(Op::For, vec![init, cond, inc, block])
+            },
+            
+            Token {
+                kind: TokenKind::While,
+                ..
+            } => {
+                
+                let op = match lhs.kind {
+                    TokenKind::For => Op::For,
+                    _ => unreachable!("by otter match arm pattern"),
+                };
+
+                self.lexer
+                    .expect(TokenKind::LeftParen, "missing (")
+                    .wrap_err("in for loop conditional")?;
+
+
+                let cond = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in cond of for loop"))?;
+
+                self.lexer
+                    .expect(TokenKind::Semicolon, "missing ;")
+                    .wrap_err("in for loop")?;
+
+                let inc = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in inc of for loop"))?;
+                
+                self.lexer
+                    .expect(TokenKind::RightParen, "missing )")
+                    .wrap_err("in for loop")?;
+                
+                self.lexer
+                    .expect(TokenKind::LeftBrace, "missing {")
+                    .wrap_err("in for loop")?;
+                
+                let block = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in block of for loop"))?;
+                
+                self.lexer
+                    .expect(TokenKind::LeftBrace, "missing }")
+                    .wrap_err("in for loop")?;
+
+                TokenTree::Cons(Op::For, vec![init, cond, inc, block])
+            },
+            
+            // prefix three arguments
+            Token {
+                kind:  TokenKind::Fun,
+                ..
+            } => {
+                
+                let op = match lhs.kind {
+                    TokenKind::Var => Op::Fun,
+                    _ => unreachable!("by otter match arm pattern"),
+                };
+                let first = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in first argument of {op:?} expression"))?;
+                let second = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in second argument of {op:?} expression"))?;
+                let third = self
+                    .parse_within(0)
+                    .wrap_err_with(|| format!("in third argument of {op:?} expression"))?;
+
+                TokenTree::Cons(op, vec![first, second, third])
+            },
+
             t => panic!("Bad token {t:?}"),
         };
+
+        loop {
+            let op = self.lexer.peek();
+            if op.map_or(false, |op| op.is_err()) {
+                return Err(self
+                    .lexer
+                    .next()
+                    .expect("Checked Some Above")
+                    .expect_err("Checked error above"))
+                .wrap_err_with(looking_for_msg);
+            }
+            let op = match op.map(|res| res.expect("handled err above")) {
+                None => break,
+                Some(Token {
+                    kind:
+                        TokenKind::LeftParen
+                        | TokenKind::Dot
+                        | TokenKind::Minus
+                        | TokenKind::Plus
+                        | TokenKind::Star
+                        | TokenKind::NotEqual
+                        | TokenKind::EqualEqual
+                        | TokenKind::Equal
+                        | TokenKind::Leq
+                        | TokenKind::Geq
+                        | TokenKind::Greater
+                        | TokenKind::Less
+                        | TokenKind::Slash
+                        | TokenKind::And
+                        | TokenKind::Or,
+                    ..
+                }) => 
+            };
+        }
     }
 }
 
 fn prefix_binding_power(op: Op) -> ((), u8) {
     match op {
-        Op::Bang | Op::Minus => ((), 9),
+        Op::Bang | Op::Minus | Op::Print | Op::Return => ((), 9),
         _ => panic!("bad op: {op:?}"),
     }
 }
