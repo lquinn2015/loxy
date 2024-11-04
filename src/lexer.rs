@@ -173,9 +173,20 @@ impl<'de> Lexer<'de> {
         }
     }
 
-    pub fn expect(&mut self, next: TokenKind, unexpected: &str) -> Result<(), miette::Error> {
+    pub fn expect(
+        &mut self,
+        expected: TokenKind,
+        unexpected: &str,
+    ) -> Result<Token<'de>, miette::Error> {
+        self.expect_where(|next| next.kind == expected, unexpected)
+    }
+    pub fn expect_where(
+        &mut self,
+        mut check: impl FnMut(&Token<'de>) -> bool,
+        unexpected: &str,
+    ) -> Result<Token<'de>, miette::Error> {
         match self.next() {
-            Some(Ok(token)) if token.kind == next => Ok(()),
+            Some(Ok(token)) if check(&token) => Ok(token),
             Some(Ok(token)) => Err(miette::miette! {
                 labels = vec![
                     LabeledSpan::at(token.offset..token.offset + token.origin.len(), "Here")
